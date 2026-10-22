@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shaka DRM session leak repro</title>
+  <style>
+    :root { color-scheme: light dark; --ok: #1a7f37; --bad: #cf222e; --muted: #6e7781; }
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 1.35rem; line-height: 1.3; }
+    form { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 20px 0; }
+    label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); }
+    select, button { font: inherit; padding: 4px 8px; }
+    code { font-size: 0.9em; }
+    #summary { font-size: 1.1rem; font-weight: 600; margin: 16px 0 8px; }
+    #summary.ok { color: var(--ok); }
+    #summary.bad { color: var(--bad); }
+    table { border-collapse: collapse; }
+    td, th { border: 1px solid #8884; padding: 2px 10px; text-align: left; }
+    #log { color: var(--muted); white-space: pre-wrap; }
+    video { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Shaka Player: a session dropped after a failed license request is never closed</h1>
+  <p>
+    The page plays the Shaka demo asset <em>Multi-DRM, multi-key</em>, which has one key per representation and so opens
+    several Widevine sessions. It waits for the license exchange, destroys the player, and reports whether each
+    <code>MediaKeySession</code> was closed. Use Chrome or Edge.
+  </p>
+  <p>
+    With failing license requests, every failure while another session is still open removes that session from
+    <code>DrmEngine</code>'s list without closing it, and <code>destroy()</code> only closes the sessions on that list.
+    Expected result: <strong>0 sessions open</strong> after <code>destroy()</code>.
+  </p>
+
+  <form id="form">
+    <label>Shaka build
+      <select name="version">
+        <option value="4.16.10">4.16.10</option>
+        <option value="5.3.1" selected>5.3.1 (latest release)</option>
+        <option value="nightly">nightly (main)</option>
+        <option value="fix">main + fix (fix/drm-close-dropped-sessions)</option>
+      </select>
+    </label>
+    <label>License requests
+      <select name="mode">
+        <option value="fail" selected>fail (request filter throws)</option>
+        <option value="ok">succeed (control)</option>
+      </select>
+    </label>
+    <button type="submit">Run</button>
+  </form>
+
+  <video id="video" muted></video>
+  <div id="summary"></div>
+  <table id="sessions" hidden>
+    <thead><tr><th>Session</th><th>Closed after destroy()</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p id="log"></p>
+
+  <script>
+    // Record every MediaKeySession the page creates, and whether it ever closes.
+    const sessions = [];
+    const createSession = MediaKeys.prototype.createSession;
+    MediaKeys.prototype.createSession = function (...args) {
+      const session = createSession.apply(this, args);
+      const record = { closed: false };
+      sessions.push(record);
+      session.closed.then(() => { record.closed = true; });
+      return session;
+    };
+  </script>
+  <script type="module">
+    const BUILDS = {
+      '4.16.10': 'https://cdn.jsdelivr.net/npm/shaka-player@4.16.10/dist/shaka-player.compiled.debug.js',
+      '5.3.1': 'https://cdn.jsdelivr.net/npm/shaka-player@5.3.1/dist/shaka-player.compiled.debug.js',
+      'nightly': 'https://nightly-dot-shaka-player-demo.appspot.com/dist/shaka-player.compiled.debug.js',
+      'fix': 'builds/shaka-player.fix-drm-close-dropped-sessions.debug.js',
+    };
+    const MANIFEST = 'https://media.axprod.net/TestVectors/v7-MultiDRM-MultiKey/Manifest.mpd';
+    const LICENSE_SERVER = 'https://drm-widevine-licensing.axtest.net/AcquireLicense';
+    // The asset's test token, from the Shaka demo app (demo/common/assets.js). Only the control run uses it.
+    const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ2ZXJzaW9uIjoxLCJjb21fa2V5X2lkIjoiYjMzNjRlYjUtNTFmNi00YWUzLThjOTgtMzNjZWQ1ZTMxYzc4IiwibWVzc2FnZSI6eyJ0eXBlIjoiZW50aXRsZW1lbnRfbWVzc2FnZSIsImtleXMiOlt7ImlkIjoiODAzOTliZjUtOGEyMS00MDE0LTgwNTMtZTI3ZTc0OGU5OGMwIiwiZW5jcnlwdGVkX2tleSI6ImxpTkpxVmFZa05oK01LY3hKRms3SWc9PSJ9LHsiaWQiOiI5MDk1M2UwOS02Y2IyLTQ5YTMtYTI2MC03YTVmZWZlYWQ0OTkiLCJlbmNyeXB0ZWRfa2V5Ijoia1l0SEh2cnJmQ01lVmRKNkxrYmtuZz09In0seyJpZCI6IjBlNGRhOTJiLWQwZTgtNGE2Ni04YzNmLWMyNWE5N2ViNjUzMiIsImVuY3J5cHRlZF9rZXkiOiI3dzdOWkhITE1nSjRtUUtFSzVMVE1RPT0ifSx7ImlkIjoiNTg1ZjIzM2YtMzA3Mi00NmYxLTlmYTQtNmRjMjJjNjZhMDE0IiwiZW5jcnlwdGVkX2tleSI6IkFjNFVVbVl0Qko1blBROU4xNXJjM2c9PSJ9LHsiaWQiOiI0MjIyYmQ3OC1iYzQ1LTQxYmYtYjYzZS02ZjgxNGRjMzkxZGYiLCJlbmNyeXB0ZWRfa2V5IjoiTzZGTzBmcVNXb3BwN2JqYy9ENGxNQT09In1dfX0.uF6YlKAREOmbniAeYiH070HSJhV0YS7zSKjlCtiDR5Y';
+
+    const form = document.getElementById('form');
+    const logElement = document.getElementById('log');
+    const log = (line) => { logElement.textContent += line + '\n'; };
+    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const params = new URLSearchParams(location.search);
+    const version = BUILDS[params.get('version')] ? params.get('version') : '5.3.1';
+    const mode = params.get('mode') === 'ok' ? 'ok' : 'fail';
+    form.version.value = version;
+    form.mode.value = mode;
+
+    // Each run is a fresh page load, so sessions from an earlier run can't mix in.
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      location.search = new URLSearchParams({ version: form.version.value, mode: form.mode.value, run: '1' }).toString();
+    });
+
+    const loadScript = (src) => new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('could not load ' + src));
+      document.head.appendChild(script);
+    });
+
+    async function run() {
+      await loadScript(BUILDS[version]);
+      log('Shaka ' + shaka.Player.version + ', license requests ' + (mode === 'ok' ? 'succeed' : 'fail'));
+      shaka.polyfill.installAll();
+      const player = new shaka.Player();
+      await player.attach(document.getElementById('video'));
+      player.addEventListener('error', (event) => log('player error ' + event.detail.code));
+      player.configure('drm.servers', { 'com.widevine.alpha': LICENSE_SERVER });
+      if (mode === 'ok') {
+        player.configure('drm.advanced', { 'com.widevine.alpha': { headers: { 'X-AxDRM-Message': TOKEN } } });
+      } else {
+        // Fail every license request, as an unreachable or rejecting license server would.
+        player.getNetworkingEngine().registerRequestFilter((type) => {
+          if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) throw new Error('license server unreachable');
+        });
+      }
+      try {
+        await player.load(MANIFEST);
+        log('loaded');
+      } catch (error) {
+        log('load failed ' + error.code);
+      }
+      await delay(5000);
+      await player.destroy();
+      await delay(1000);
+      log('sessions after destroy ' + JSON.stringify(sessions));
+
+      const open = sessions.filter((session) => !session.closed).length;
+      const summary = document.getElementById('summary');
+      summary.textContent = open + ' of ' + sessions.length + ' sessions still open after destroy()';
+      summary.className = open ? 'bad' : 'ok';
+      const table = document.getElementById('sessions');
+      table.tBodies[0].innerHTML = sessions
+        .map((session, index) => '<tr><td>' + (index + 1) + '</td><td>' + (session.closed ? 'yes' : '<strong>no</strong>') + '</td></tr>')
+        .join('');
+      table.hidden = false;
+      document.body.dataset.result = JSON.stringify({ version: shaka.Player.version, mode, sessions });
+    }
+
+    if (params.get('run')) {
+      run().catch((error) => log('error: ' + error.message));
+    }
+  </script>
+</body>
+</html>
