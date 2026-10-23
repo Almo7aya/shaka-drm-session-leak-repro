@@ -17,6 +17,8 @@ Direct links (open in Chrome or Edge):
 | `main` + fix | [run](https://almo7aya.dev/shaka-drm-session-leak-repro/?version=fix&mode=fail&run=1) | [run](https://almo7aya.dev/shaka-drm-session-leak-repro/?version=fix&mode=ok&run=1) |
 
 `builds/shaka-player.fix-drm-close-dropped-sessions.debug.js` is a debug build (`python3 build/build.py --mode debug`)
-of Shaka Player `main` at `612cdb4c8` with the fix applied.
+of the fix branch, [`Almo7aya/shaka-player@2a145243e`](https://github.com/Almo7aya/shaka-player/commit/2a145243e), which is
+Shaka Player `main` at `8cbf5d6da` plus the fix. It reports its version as `v4.16.54-main-1-g2a145243e`, because Shaka's
+release tooling tags `main` with maintenance-release markers and the build names itself with `git describe`.
 
 This repository only exists for the bug report and will be deleted once it is resolved.
